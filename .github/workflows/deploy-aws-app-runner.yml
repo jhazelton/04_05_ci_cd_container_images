@@ -49,10 +49,10 @@ jobs:
           # npm run build
           echo "No build step defined, skipping."
 
-      - name: Sync static files to S3
+      - name: Upload files to S3
         env:
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         run: |
           # Adjust the source directory if your build output is not ./public
-          aws s3 sync ./public s3://$S3_BUCKET_NAME --delete --acl public-read
+          aws s3 sync ./public s3://$S3_BUCKET_NAME --delete 
 
