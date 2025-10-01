@@ -1,4 +1,5 @@
-name: "3-Deployment"
+name: "3-Deployment to S3"
+
 on:
   workflow_call:
     inputs:
@@ -10,81 +11,48 @@ on:
       environment:
         required: true
         type: choice
-        description: Enter the target environment for the deployment
+        description: Target environment for deployment
         options:
-        - Staging
-        - Production
+          - Staging
+          - Production
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  AWS_REGION: ${{ vars.AWS_REGION }}
 
 jobs:
-  build:
+  deploy:
+    runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.environment }}
-      url: ${{ vars.URL }}
-    runs-on: ubuntu-latest
-    permissions:
-      packages: read
-    concurrency:
-      group: deploy-${{ inputs.environment }}
-      cancel-in-progress: false
+
     steps:
-      - name: Configure AWS Credentials
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Deploy staging with push to ECR
-        if: ${{ inputs.environment }} == 'Staging'
-        id: push
+      - name: Build static site (if applicable)
+        if: ${{ inputs.environment == 'Production' || inputs.environment == 'Staging' }}
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main ${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ github.event.repository.name }}
-          docker push ${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ github.event.repository.name }}
+          # Add your build commands here if needed, e.g.:
+          # npm install
+          # npm run build
+          echo "No build step defined, skipping."
 
-      - name: Deploy production with aws CLI
-        if: ${{ inputs.environment }} == 'Production'
+      - name: Sync static files to S3
+        env:
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         run: |
-          aws apprunner start-deployment --service-arn="${{ vars.SERVICE_ARN }}"
+          # Adjust the source directory if your build output is not ./public
+          aws s3 sync ./public s3://$S3_BUCKET_NAME --delete --acl public-read
 
-      - name: Wait for Deployment to Begin
-        run: |
-          STATUS=$(aws apprunner describe-service --query="Service.Status" --output=text --service-arn="${{ vars.SERVICE_ARN }}")
-
-          until [ "${STATUS}" == "OPERATION_IN_PROGRESS" ];
-          do
-            echo "$(date) ${STATUS}"
-            STATUS=$(aws apprunner describe-service --query="Service.Status" --output=text --service-arn="${{ vars.SERVICE_ARN }}")
-            sleep 10;
-          done
-
-      - name: Wait for Deployment to Complete
-        id: status
-        timeout-minutes: 10
-        run: |
-          STATUS=$(aws apprunner describe-service --query="Service.Status" --output=text --service-arn="${{ vars.SERVICE_ARN }}")
-
-          while [ "${STATUS}" == "OPERATION_IN_PROGRESS" ];
-          do
-            echo "$(date) ${STATUS}"
-            STATUS=$(aws apprunner describe-service --query="Service.Status" --output=text --service-arn="${{ vars.SERVICE_ARN }}")
-            sleep 30;
-          done
-          echo "deployment_status=${STATUS}" >> "$GITHUB_OUTPUT"
-
-      - name: Check Deployment Status
-        id: check
-        run: |
-          if [ "${{ steps.status.outputs.deployment_status }}" == "RUNNING" ]; then
-            echo "Deployment successful"
-          else
-            echo "Deployment failed: ${{ steps.status.outputs.deployment_status }}"
-            exit 1
-          fi
